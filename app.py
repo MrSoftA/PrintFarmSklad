@@ -423,3 +423,4 @@ elif section == "🏭 Склад деталей":
                     c1.metric("Вес одной детали", f"{weight_per_item:.2f} г")
                     c2.metric("Расчётный вес партии", f"{total_weight_g:,.1f} г")
                     c3.metric("", f"{total_weight_g / 1000:,.3f} кг")
+
