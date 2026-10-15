@@ -3,6 +3,10 @@ import requests
 import pandas as pd
 from datetime import datetime
 
+# ---------------------------------------------------------------------------
+# Config
+# ---------------------------------------------------------------------------
+
 API_BASE = "http://localhost:8000"
 
 st.set_page_config(
@@ -12,16 +16,17 @@ st.set_page_config(
 )
 
 # ---------------------------------------------------------------------------
-# Helper utilities
+# Helpers
 # ---------------------------------------------------------------------------
 
 def api_get(path: str):
+    """GET request — returns parsed JSON or None on error."""
     try:
         r = requests.get(f"{API_BASE}{path}", timeout=5)
         r.raise_for_status()
         return r.json()
     except requests.exceptions.ConnectionError:
-        st.error("❌ Нет соединения с сервером. Убедитесь, что FastAPI запущен на порту 8000.")
+        st.error("❌ Нет соединения с сервером. Убедитесь, что FastAPI запущен на localhost:8000.")
         return None
     except requests.exceptions.HTTPError as e:
         st.error(f"❌ Ошибка сервера: {e.response.json().get('detail', str(e))}")
@@ -29,15 +34,20 @@ def api_get(path: str):
 
 
 def api_post(path: str, payload: dict):
+    """POST request — returns parsed JSON or None on error."""
     try:
         r = requests.post(f"{API_BASE}{path}", json=payload, timeout=5)
         r.raise_for_status()
         return r.json()
     except requests.exceptions.ConnectionError:
-        st.error("❌ Нет соединения с сервером. Убедитесь, что FastAPI запущен на порту 8000.")
+        st.error("❌ Нет соединения с сервером. Убедитесь, что FastAPI запущен на localhost:8000.")
         return None
     except requests.exceptions.HTTPError as e:
-        detail = e.response.json().get("detail", str(e))
+        detail = ""
+        try:
+            detail = e.response.json().get("detail", str(e))
+        except Exception:
+            detail = str(e)
         st.error(f"❌ Ошибка: {detail}")
         return None
 
@@ -46,249 +56,274 @@ def api_post(path: str, payload: dict):
 # Sidebar navigation
 # ---------------------------------------------------------------------------
 
+st.sidebar.image(
+    "https://cdn-icons-png.flaticon.com/512/2920/2920277.png",
+    width=80,
+)
 st.sidebar.title("🖨️ PrintFarm ERP")
 st.sidebar.markdown("---")
+
 section = st.sidebar.radio(
     "Навигация",
-    ["📦 Номенклатура", "🧪 Сырьё", "📋 Заказы и Печать", "🏭 Склад деталей"],
+    options=[
+        "📦 Номенклатура",
+        "🧪 Сырье",
+        "📋 Заказы и Печать",
+        "🏭 Склад деталей",
+    ],
 )
+
 st.sidebar.markdown("---")
-st.sidebar.caption(f"Время: {datetime.now().strftime('%d.%m.%Y %H:%M')}")
+st.sidebar.caption(f"Обновлено: {datetime.now().strftime('%d.%m.%Y %H:%M')}")
 
 
 # ===========================================================================
-# 1. НОМЕНКЛАТУРА (Parts Catalog)
+# 1. НОМЕНКЛАТУРА
 # ===========================================================================
 
 if section == "📦 Номенклатура":
     st.title("📦 Номенклатура деталей")
+    st.markdown("Справочник всех деталей, доступных для печати.")
 
     parts = api_get("/parts/")
 
-    # --- Display existing parts ---
-    st.subheader("Текущий каталог")
+    # --- Catalog table ---
     if parts is not None:
         if parts:
             df = pd.DataFrame(parts)[
                 ["id", "name", "material", "items_per_bed", "weight_per_item_g", "print_time_mins"]
             ]
-            df.columns = ["ID", "Название", "Материал", "Шт./стол", "Вес (г/шт.)", "Время печати (мин)"]
+            df.columns = ["ID", "Название", "Материал", "Шт. на столе", "Вес (г/шт)", "Время печати (мин)"]
             st.dataframe(df, use_container_width=True, hide_index=True)
         else:
-            st.info("Каталог пуст. Добавьте первую деталь ниже.")
+            st.info("ℹ️ Каталог пуст. Добавьте первую деталь ниже.")
 
     st.markdown("---")
 
-    # --- Create new part form ---
+    # --- Create part form ---
     st.subheader("➕ Добавить новую деталь")
     with st.form("form_create_part", clear_on_submit=True):
         col1, col2 = st.columns(2)
         with col1:
-            name = st.text_input("Название детали *", placeholder="например, Крышка корпуса")
-            material = st.text_input("Материал", value="PETG (Черный)")
-            items_per_bed = st.number_input("Штук на стол", min_value=1, value=30, step=1)
+            p_name = st.text_input("Название детали *", placeholder="Например: Кронштейн А")
+            p_material = st.text_input("Материал", value="PETG (Черный)")
         with col2:
-            weight_per_item_g = st.number_input("Вес одной детали (г)", min_value=0.1, value=2.0, step=0.1, format="%.2f")
-            print_time_mins = st.number_input("Время печати (мин)", min_value=1, value=300, step=5)
-            image_path = st.text_input("Путь к изображению (необязательно)", placeholder="/images/part.png")
+            p_items_per_bed = st.number_input("Шт. на столе (items_per_bed)", min_value=1, value=30)
+            p_weight = st.number_input("Вес одной детали (г)", min_value=0.01, value=2.0, step=0.1, format="%.2f")
+            p_print_time = st.number_input("Время печати (мин)", min_value=1, value=300)
 
-        submitted = st.form_submit_button("✅ Добавить деталь", use_container_width=True)
+        submitted = st.form_submit_button("💾 Создать деталь", use_container_width=True)
         if submitted:
-            if not name.strip():
+            if not p_name.strip():
                 st.warning("⚠️ Укажите название детали.")
             else:
-                payload = {
-                    "name": name.strip(),
-                    "material": material.strip(),
-                    "items_per_bed": int(items_per_bed),
-                    "weight_per_item_g": float(weight_per_item_g),
-                    "print_time_mins": int(print_time_mins),
-                    "image_path": image_path.strip() or None,
-                }
-                result = api_post("/parts/", payload)
+                result = api_post("/parts/", {
+                    "name": p_name.strip(),
+                    "material": p_material.strip(),
+                    "items_per_bed": p_items_per_bed,
+                    "weight_per_item_g": p_weight,
+                    "print_time_mins": p_print_time,
+                })
                 if result:
-                    st.success(f"✅ Деталь «{result['name']}» успешно добавлена (ID: {result['id']}).")
+                    st.success(f"✅ Деталь «{result['name']}» (ID {result['id']}) успешно добавлена!")
                     st.rerun()
 
 
 # ===========================================================================
-# 2. СЫРЬЁ (Raw Materials)
+# 2. СЫРЬЕ
 # ===========================================================================
 
-elif section == "🧪 Сырьё":
-    st.title("🧪 Склад сырья (пластик)")
+elif section == "🧪 Сырье":
+    st.title("🧪 Управление сырьём (пластик)")
 
-    # Fetch material stock indirectly: start a fresh order to see materials
-    # We display stock via parts materials; materials stock is a flat table
-    # We fetch all parts to know which materials are in use
-    parts = api_get("/parts/")
+    # Try to fetch all materials — there's no GET /materials/ endpoint,
+    # so we show the info from the add-response cached in session_state.
+    # We surface a helpful note and a metric card if we have data.
 
-    st.subheader("Текущие остатки")
-
-    # Since there's no GET /materials/ endpoint, we maintain a display hint
     st.info(
-        "ℹ️ Для просмотра остатков добавьте приход ниже. "
-        "Фактический остаток отображается при сборе тиража."
+        "ℹ️ Для просмотра остатков сырья после получения партии данные отображаются автоматически. "
+        "Для первоначального ввода остатка — введите текущий вес как приход.",
+        icon="ℹ️",
     )
 
-    # Show a placeholder metric — real balance shown after operations
-    st.markdown("---")
+    # --- Display cached stock from last add operation ---
+    if "last_material_response" in st.session_state:
+        lm = st.session_state["last_material_response"]
+        col1, col2 = st.columns([1, 3])
+        with col1:
+            st.metric(
+                label=f"🧱 {lm['material_name']}",
+                value=f"{lm['total_weight_g']:,.0f} г",
+                help="Актуальный остаток после последней операции",
+            )
 
-    # --- Form to add plastic ---
-    st.subheader("📥 Принять пластик на склад")
+    st.markdown("---")
+    st.subheader("📥 Оприходовать пластик")
+
     with st.form("form_add_material", clear_on_submit=True):
         col1, col2 = st.columns(2)
         with col1:
-            material_options = []
-            if parts:
-                material_options = list({p["material"] for p in parts})
-            material_name = st.text_input(
-                "Наименование материала *",
-                value=material_options[0] if material_options else "PETG (Черный)",
-                help="Должно точно совпадать с материалом в номенклатуре.",
-            )
+            mat_name = st.text_input("Тип материала", value="PETG (Черный)")
         with col2:
-            weight_to_add = st.number_input(
-                "Количество (г) *",
+            mat_weight = st.number_input(
+                "Вес партии (г) *",
                 min_value=1.0,
                 value=9000.0,
-                step=500.0,
+                step=100.0,
                 format="%.0f",
+                help="Введите граммы принятого пластика",
             )
 
-        submitted = st.form_submit_button("✅ Принять на склад", use_container_width=True)
+        submitted = st.form_submit_button("➕ Добавить на склад", use_container_width=True)
         if submitted:
-            if not material_name.strip():
-                st.warning("⚠️ Укажите наименование материала.")
-            else:
-                payload = {
-                    "material_name": material_name.strip(),
-                    "weight_to_add_g": float(weight_to_add),
-                }
-                result = api_post("/materials/add", payload)
-                if result:
-                    col_a, col_b = st.columns(2)
-                    col_a.metric("Материал", result["material_name"])
-                    col_b.metric(
-                        "Общий остаток",
-                        f"{result['total_weight_g']:,.0f} г",
-                        delta=f"+{weight_to_add:,.0f} г",
-                    )
-                    st.success(
-                        f"✅ Принято {weight_to_add:,.0f} г «{result['material_name']}». "
-                        f"Итого на складе: {result['total_weight_g']:,.0f} г."
-                    )
+            result = api_post("/materials/add", {
+                "material_name": mat_name.strip(),
+                "weight_to_add_g": mat_weight,
+            })
+            if result:
+                st.session_state["last_material_response"] = result
+                st.success(
+                    f"✅ Принято **{mat_weight:,.0f} г** материала «{result['material_name']}». "
+                    f"Итого на складе: **{result['total_weight_g']:,.0f} г**."
+                )
+                st.rerun()
+
+    # Quick reference metric cards
+    st.markdown("---")
+    st.caption("💡 Подсказка: 1 стандартная катушка = 1 000 г | 1 пакет = 9 000 г")
 
 
 # ===========================================================================
-# 3. ЗАКАЗЫ И ПЕЧАТЬ (Orders & Sessions)
+# 3. ЗАКАЗЫ И ПЕЧАТЬ
 # ===========================================================================
 
 elif section == "📋 Заказы и Печать":
     st.title("📋 Заказы и управление печатью")
 
+    # Fetch supporting data
     parts = api_get("/parts/") or []
 
     # -----------------------------------------------------------------------
-    # 3a. Active orders list
+    # 3a. Active orders
     # -----------------------------------------------------------------------
-    st.subheader("Текущие заказы")
-    orders = api_get("/orders/") or []   # endpoint not yet in backend — handled gracefully
+    st.subheader("📑 Активные заказы")
 
-    if isinstance(orders, list) and orders:
-        rows = []
-        for o in orders:
-            part_name = next((p["name"] for p in parts if p["id"] == o["part_id"]), "—")
-            rows.append({
-                "ID": o["id"],
-                "Клиент": o["customer"],
-                "Деталь": part_name,
-                "План": o["target_quantity"],
-                "Выполнено": o["completed_quantity"],
-                "Статус": o["status"],
-                "Дедлайн": o.get("deadline", "—"),
-            })
-        df_orders = pd.DataFrame(rows)
+    orders = api_get("/orders/") if False else None  # no GET /orders/ endpoint
+    # Since the API has no GET /orders/ endpoint, show a note and rely on session_state.
+    if "orders_list" not in st.session_state:
+        st.session_state["orders_list"] = []
+
+    orders_list = st.session_state["orders_list"]
+
+    if orders_list:
+        df_orders = pd.DataFrame(orders_list)
+        # Friendly column mapping
+        display_cols = {
+            "id": "ID",
+            "customer": "Заказчик",
+            "part_id": "ID детали",
+            "target_quantity": "Кол-во (план)",
+            "completed_quantity": "Кол-во (факт)",
+            "status": "Статус",
+            "deadline": "Дедлайн",
+        }
+        df_orders = df_orders[[c for c in display_cols if c in df_orders.columns]].rename(columns=display_cols)
         st.dataframe(df_orders, use_container_width=True, hide_index=True)
     else:
-        st.info("Нет активных заказов.")
+        st.info("ℹ️ Нет сохранённых заказов в текущей сессии. Создайте заказ ниже.")
 
     st.markdown("---")
 
     # -----------------------------------------------------------------------
-    # 3b. Create order form
+    # 3b. Create order
     # -----------------------------------------------------------------------
     st.subheader("➕ Создать новый заказ")
+
     if not parts:
         st.warning("⚠️ Сначала добавьте детали в номенклатуру.")
     else:
+        part_options = {f"[{p['id']}] {p['name']} ({p['material']})": p["id"] for p in parts}
+
         with st.form("form_create_order", clear_on_submit=True):
             col1, col2 = st.columns(2)
             with col1:
-                customer = st.text_input("Клиент *", placeholder="ООО Ромашка")
-                part_options = {p["name"]: p["id"] for p in parts}
-                part_name_sel = st.selectbox("Деталь *", list(part_options.keys()))
+                customer = st.text_input("Заказчик *", placeholder="ООО Ромашка")
+                selected_part_label = st.selectbox("Деталь *", options=list(part_options.keys()))
             with col2:
-                target_qty = st.number_input("Количество (шт.) *", min_value=1, value=100, step=10)
-                deadline_date = st.date_input("Дедлайн (необязательно)", value=None)
+                qty = st.number_input("Количество деталей *", min_value=1, value=100)
+                deadline_input = st.date_input("Дедлайн (необязательно)", value=None)
 
-            submitted = st.form_submit_button("✅ Создать заказ", use_container_width=True)
-            if submitted:
+            sub_order = st.form_submit_button("📋 Создать заказ", use_container_width=True)
+            if sub_order:
                 if not customer.strip():
-                    st.warning("⚠️ Укажите клиента.")
+                    st.warning("⚠️ Укажите заказчика.")
                 else:
                     payload = {
                         "customer": customer.strip(),
-                        "part_id": part_options[part_name_sel],
-                        "target_quantity": int(target_qty),
-                        "deadline": str(deadline_date) + "T00:00:00" if deadline_date else None,
+                        "part_id": part_options[selected_part_label],
+                        "target_quantity": qty,
+                        "deadline": deadline_input.isoformat() if deadline_input else None,
                     }
                     result = api_post("/orders/", payload)
                     if result:
+                        st.session_state["orders_list"].append(result)
                         st.success(
-                            f"✅ Заказ #{result['id']} для «{result['customer']}» создан: "
-                            f"{result['target_quantity']} шт."
+                            f"✅ Заказ №{result['id']} для «{result['customer']}» создан! "
+                            f"Требуется: {result['target_quantity']} шт."
                         )
                         st.rerun()
 
     st.markdown("---")
 
     # -----------------------------------------------------------------------
-    # 3c. Start a print session
+    # 3c. Start print session
     # -----------------------------------------------------------------------
-    st.subheader("🖨️ Запустить тираж")
-    active_orders = [o for o in orders if isinstance(o, dict) and o.get("status") == "В процессе"]
+    st.subheader("🚀 Запустить сеанс печати")
+
+    active_orders = [o for o in st.session_state.get("orders_list", []) if o.get("status") == "В процессе"]
 
     if not active_orders:
-        st.info("Нет активных заказов для запуска тиража.")
+        st.info("ℹ️ Нет активных заказов для запуска печати.")
     else:
-        with st.form("form_start_session", clear_on_submit=True):
-            order_labels = {
-                f"#{o['id']} — {o['customer']} ({next((p['name'] for p in parts if p['id'] == o['part_id']), '?')})"
-                : o["id"]
-                for o in active_orders
-            }
-            selected_order_label = st.selectbox("Заказ *", list(order_labels.keys()))
-            col1, col2 = st.columns(2)
-            with col1:
-                beds_started = st.number_input("Столов запущено *", min_value=1, value=1, step=1)
-            with col2:
-                items_per_bed_actual = st.number_input(
-                    "Фактически деталей на стол *", min_value=1, value=30, step=1
-                )
+        order_labels = {f"Заказ №{o['id']} — {o['customer']}": o["id"] for o in active_orders}
 
-            submitted = st.form_submit_button("🚀 Запустить печать", use_container_width=True)
-            if submitted:
-                payload = {
-                    "order_id": order_labels[selected_order_label],
-                    "beds_started": int(beds_started),
-                    "items_per_bed_actual": int(items_per_bed_actual),
-                }
-                result = api_post("/sessions/start", payload)
+        with st.form("form_start_session", clear_on_submit=True):
+            col1, col2, col3 = st.columns(3)
+            with col1:
+                sel_order_label = st.selectbox("Заказ *", options=list(order_labels.keys()))
+            with col2:
+                beds_started = st.number_input("Кол-во столов (beds)", min_value=1, value=1)
+            with col3:
+                # Pre-fill items_per_bed from the part linked to the selected order
+                sel_order_id = order_labels.get(sel_order_label)
+                sel_order = next((o for o in active_orders if o["id"] == sel_order_id), None)
+                default_ipb = 30
+                if sel_order:
+                    part_info = next((p for p in parts if p["id"] == sel_order.get("part_id")), None)
+                    if part_info:
+                        default_ipb = part_info["items_per_bed"]
+                items_per_bed = st.number_input("Деталей на стол *", min_value=1, value=default_ipb)
+
+            sub_session = st.form_submit_button("▶️ Запустить печать", use_container_width=True)
+            if sub_session:
+                result = api_post("/sessions/start", {
+                    "order_id": sel_order_id,
+                    "beds_started": beds_started,
+                    "items_per_bed_actual": items_per_bed,
+                })
                 if result:
+                    if "sessions_list" not in st.session_state:
+                        st.session_state["sessions_list"] = []
+                    st.session_state["sessions_list"].append(result)
+                    end_time = result.get("expected_end_time", "")
+                    try:
+                        end_dt = datetime.fromisoformat(end_time)
+                        end_str = end_dt.strftime("%d.%m.%Y %H:%M")
+                    except Exception:
+                        end_str = end_time
                     st.success(
-                        f"✅ Тираж #{result['id']} запущен! "
-                        f"Ожидаемое завершение: {result['expected_end_time'][:16].replace('T', ' ')}."
+                        f"✅ Сеанс №{result['id']} запущен! "
+                        f"Ожидаемое окончание: **{end_str}**."
                     )
                     st.rerun()
 
@@ -297,130 +332,192 @@ elif section == "📋 Заказы и Печать":
     # -----------------------------------------------------------------------
     # 3d. Collect beds
     # -----------------------------------------------------------------------
-    st.subheader("✅ Собрать тираж")
-    session_id_input = st.number_input(
-        "ID тиража (сессии) для сборки",
-        min_value=1,
-        step=1,
-        value=1,
-        help="Введите ID сессии, которую нужно собрать.",
-    )
+    st.subheader("✅ Собрать столы (завершить сеанс)")
 
-    with st.form("form_collect_session", clear_on_submit=True):
-        col1, col2 = st.columns(2)
-        with col1:
-            successful_beds = st.number_input("✅ Успешных столов", min_value=0, value=1, step=1)
-        with col2:
-            failed_beds = st.number_input("❌ Бракованных столов", min_value=0, value=0, step=1)
+    sessions_list = st.session_state.get("sessions_list", [])
+    active_sessions = [s for s in sessions_list if s.get("status") == "Печатается"]
 
-        submitted = st.form_submit_button("📦 Собрать и списать материал", use_container_width=True)
-        if submitted:
-            if successful_beds + failed_beds == 0:
-                st.warning("⚠️ Укажите хотя бы один стол (успешный или бракованный).")
-            else:
-                payload = {
-                    "successful_beds": int(successful_beds),
-                    "failed_beds": int(failed_beds),
-                }
-                result = api_post(f"/sessions/{int(session_id_input)}/collect", payload)
-                if result:
-                    st.success(f"✅ Тираж #{int(session_id_input)} успешно собран!")
-                    col_a, col_b, col_c = st.columns(3)
-                    col_a.metric("Произведено деталей", f"{result['items_produced']} шт.")
-                    col_b.metric("Списано пластика", f"{result['plastic_consumed_g']:,.1f} г")
-                    col_c.metric("Остаток материала", f"{result['material_remaining_g']:,.1f} г")
-                    st.info(
-                        f"Заказ #{result['order_id'] if 'order_id' in result else '—'}: "
-                        f"выполнено {result['order_completed_quantity']} шт. | "
-                        f"Статус: {result['order_status']}"
+    if not active_sessions:
+        st.info("ℹ️ Нет активных сеансов печати.")
+    else:
+        session_labels = {
+            f"Сеанс №{s['id']} (Заказ №{s['order_id']}) — {s['beds_started']} стол(ов)": s["id"]
+            for s in active_sessions
+        }
+
+        with st.form("form_collect_beds", clear_on_submit=True):
+            sel_sess_label = st.selectbox("Выберите сеанс *", options=list(session_labels.keys()))
+            col1, col2 = st.columns(2)
+            with col1:
+                successful_beds = st.number_input("✅ Успешных столов", min_value=0, value=1)
+            with col2:
+                failed_beds = st.number_input("❌ Бракованных столов (скрап)", min_value=0, value=0)
+
+            sel_sess_id = session_labels.get(sel_sess_label)
+
+            # Preview calculation
+            sel_sess = next((s for s in active_sessions if s["id"] == sel_sess_id), None)
+            if sel_sess:
+                ipb = sel_sess.get("items_per_bed_actual", 0)
+                expected_good = successful_beds * ipb
+                expected_scrap = failed_beds * ipb
+                total_beds_collect = successful_beds + failed_beds
+                st.caption(
+                    f"📊 Предварительный расчёт: "
+                    f"**{expected_good} шт.** годных | "
+                    f"**{expected_scrap} шт.** брак | "
+                    f"Всего столов: **{total_beds_collect}**"
+                )
+
+            sub_collect = st.form_submit_button("📦 Собрать и записать результат", use_container_width=True)
+            if sub_collect:
+                if successful_beds + failed_beds == 0:
+                    st.warning("⚠️ Укажите хотя бы один стол (успешный или бракованный).")
+                else:
+                    result = api_post(
+                        f"/sessions/{sel_sess_id}/collect",
+                        {"successful_beds": successful_beds, "failed_beds": failed_beds},
                     )
+                    if result:
+                        # Update session status in local cache
+                        for s in st.session_state["sessions_list"]:
+                            if s["id"] == sel_sess_id:
+                                s["status"] = "Собрано"
+                        # Update order status in local cache
+                        for o in st.session_state["orders_list"]:
+                            if o["id"] == result.get("order_id") or True:
+                                if o["id"] == sel_sess.get("order_id"):
+                                    o["completed_quantity"] = result["order_completed_quantity"]
+                                    o["status"] = result["order_status"]
+
+                        st.success(
+                            f"✅ Сеанс №{sel_sess_id} собран! "
+                            f"Произведено: **{result['items_produced']} шт.** | "
+                            f"Израсходовано пластика: **{result['plastic_consumed_g']:,.1f} г** | "
+                            f"Остаток пластика: **{result['material_remaining_g']:,.1f} г**"
+                        )
+                        st.rerun()
 
 
 # ===========================================================================
-# 4. СКЛАД ДЕТАЛЕЙ (Finished Goods)
+# 4. СКЛАД ДЕТАЛЕЙ
 # ===========================================================================
 
 elif section == "🏭 Склад деталей":
     st.title("🏭 Склад готовых деталей")
 
-    finished = api_get("/finished-goods/") or []
     parts = api_get("/parts/") or []
     parts_map = {p["id"]: p for p in parts}
 
-    if finished:
-        rows = []
-        for fg in finished:
-            part = parts_map.get(fg["part_id"], {})
-            rows.append({
-                "ID записи": fg["id"],
-                "Деталь": part.get("name", f"part_id={fg['part_id']}"),
-                "Количество (шт.)": fg["quantity"],
-                "Местонахождение": fg["location"],
-                "Материал": part.get("material", "—"),
-            })
-        df_fg = pd.DataFrame(rows)
+    # Since the API has no GET /finished_goods/, we track locally in session_state
+    # from collect results. Show a helpful message alongside any cached data.
+
+    st.info(
+        "ℹ️ Данные склада формируются на основе операций текущей сессии. "
+        "Перезапустите приложение для актуализации с базой данных.",
+        icon="ℹ️",
+    )
+
+    # Build finished goods table from sessions
+    fg_data: dict[int, dict] = {}  # part_id -> {name, material, quantity, location, weight_per_item_g}
+
+    for s in st.session_state.get("sessions_list", []):
+        if s.get("status") == "Собрано":
+            order_id = s.get("order_id")
+            order = next(
+                (o for o in st.session_state.get("orders_list", []) if o["id"] == order_id),
+                None,
+            )
+            if not order:
+                continue
+            part_id = order.get("part_id")
+            part = parts_map.get(part_id)
+            if not part:
+                continue
+
+            items_produced = s.get("items_per_bed_actual", 0) * s.get("beds_started", 0)
+            # Use collected qty if stored in session
+            if part_id not in fg_data:
+                fg_data[part_id] = {
+                    "Название": part["name"],
+                    "Материал": part["material"],
+                    "Количество (шт)": 0,
+                    "Вес (г/шт)": part["weight_per_item_g"],
+                    "Локация": "Главный склад",
+                }
+            fg_data[part_id]["Количество (шт)"] += items_produced
+
+    # Merge completed_quantity from orders (more accurate)
+    for order in st.session_state.get("orders_list", []):
+        part_id = order.get("part_id")
+        part = parts_map.get(part_id)
+        if not part:
+            continue
+        cq = order.get("completed_quantity", 0)
+        if cq > 0:
+            if part_id not in fg_data:
+                fg_data[part_id] = {
+                    "Название": part["name"],
+                    "Материал": part["material"],
+                    "Количество (шт)": cq,
+                    "Вес (г/шт)": part["weight_per_item_g"],
+                    "Локация": "Главный склад",
+                }
+            else:
+                # Use order's completed_quantity as source of truth
+                fg_data[part_id]["Количество (шт)"] = cq
+
+    if fg_data:
+        df_fg = pd.DataFrame(list(fg_data.values()))
+        df_fg["Общий вес (г)"] = (df_fg["Количество (шт)"] * df_fg["Вес (г/шт)"]).round(1)
 
         # Summary metrics
-        total_items = df_fg["Количество (шт.)"].sum()
-        unique_parts = df_fg["Деталь"].nunique()
-        col1, col2 = st.columns(2)
-        col1.metric("Всего деталей на складе", f"{total_items:,} шт.")
-        col2.metric("Уникальных позиций", unique_parts)
+        col1, col2, col3 = st.columns(3)
+        with col1:
+            st.metric("📦 Позиций на складе", len(df_fg))
+        with col2:
+            st.metric("🔢 Всего деталей", f"{df_fg['Количество (шт)'].sum():,}")
+        with col3:
+            st.metric("⚖️ Общий вес", f"{df_fg['Общий вес (г)'].sum():,.0f} г")
 
         st.markdown("---")
-        st.subheader("Детальная таблица")
         st.dataframe(df_fg, use_container_width=True, hide_index=True)
-
-        # -------------------------------------------------------------------
-        # Weight calculator expander
-        # -------------------------------------------------------------------
-        st.markdown("---")
-        with st.expander("⚖️ Калькулятор веса", expanded=False):
-            st.markdown("Выберите деталь и количество — получите расчётный вес партии.")
-            part_names = [r["Деталь"] for r in rows]
-            selected_part_name = st.selectbox("Деталь", part_names, key="wc_part")
-
-            selected_row = next((r for r in rows if r["Деталь"] == selected_part_name), None)
-            if selected_row:
-                part_detail = parts_map.get(
-                    next((fg["part_id"] for fg in finished
-                          if parts_map.get(fg["part_id"], {}).get("name") == selected_part_name), None),
-                    {}
-                )
-                weight_per_item = part_detail.get("weight_per_item_g", 0)
-
-                qty_calc = st.number_input(
-                    "Количество для расчёта (шт.)",
-                    min_value=1,
-                    value=100,
-                    step=10,
-                    key="wc_qty",
-                )
-                total_weight_g = qty_calc * weight_per_item
-                total_weight_kg = total_weight_g / 1000
-
-                calc_col1, calc_col2, calc_col3 = st.columns(3)
-                calc_col1.metric("Вес одной детали", f"{weight_per_item:.2f} г")
-                calc_col2.metric("Расчётный вес партии", f"{total_weight_g:,.1f} г")
-                calc_col3.metric("", f"{total_weight_kg:,.3f} кг")
-
     else:
-        st.info("Склад пуст. Запустите и соберите тираж, чтобы пополнить склад.")
+        st.warning("⚠️ Склад пуст. Выполните сбор столов в разделе «Заказы и Печать».")
 
-        # Show weight calculator even when warehouse is empty if parts exist
-        if parts:
-            st.markdown("---")
-            with st.expander("⚖️ Калькулятор веса", expanded=False):
-                st.markdown("Выберите деталь из номенклатуры и введите количество для расчёта веса.")
-                part_names_all = [p["name"] for p in parts]
-                selected_part_name = st.selectbox("Деталь", part_names_all, key="wc_part_empty")
-                part_detail = next((p for p in parts if p["name"] == selected_part_name), None)
-                if part_detail:
-                    weight_per_item = part_detail["weight_per_item_g"]
-                    qty_calc = st.number_input("Количество (шт.)", min_value=1, value=100, step=10, key="wc_qty_empty")
-                    total_weight_g = qty_calc * weight_per_item
-                    c1, c2, c3 = st.columns(3)
-                    c1.metric("Вес одной детали", f"{weight_per_item:.2f} г")
-                    c2.metric("Расчётный вес партии", f"{total_weight_g:,.1f} г")
-                    c3.metric("", f"{total_weight_g / 1000:,.3f} кг")
+    # -----------------------------------------------------------------------
+    # Weight calculator expander
+    # -----------------------------------------------------------------------
+    st.markdown("---")
+    with st.expander("⚖️ Калькулятор веса", expanded=False):
+        st.markdown("Рассчитайте ожидаемый вес партии деталей.")
 
+        if not parts:
+            st.warning("Нет деталей в номенклатуре.")
+        else:
+            part_options_wc = {f"[{p['id']}] {p['name']} — {p['weight_per_item_g']} г/шт": p for p in parts}
+            sel_part_label = st.selectbox(
+                "Выберите деталь",
+                options=list(part_options_wc.keys()),
+                key="wc_part",
+            )
+            qty_calc = st.number_input(
+                "Количество деталей",
+                min_value=1,
+                value=100,
+                key="wc_qty",
+            )
+
+            sel_part_wc = part_options_wc[sel_part_label]
+            total_weight = qty_calc * sel_part_wc["weight_per_item_g"]
+
+            col1, col2, col3 = st.columns(3)
+            with col1:
+                st.metric("📦 Деталей", f"{qty_calc:,} шт.")
+            with col2:
+                st.metric("⚖️ Вес на штуку", f"{sel_part_wc['weight_per_item_g']:.2f} г")
+            with col3:
+                st.metric("🏋️ Итоговый вес", f"{total_weight:,.1f} г")
+
+            if total_weight >= 1000:
+                st.info(f"ℹ️ Это примерно **{total_weight / 1000:.2f} кг** или **{total_weight / 9000:.1f}** стандартных пакетов.")
