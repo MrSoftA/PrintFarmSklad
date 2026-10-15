@@ -2,6 +2,7 @@ import streamlit as st
 import requests
 import pandas as pd
 from datetime import datetime
+from streamlit_option_menu import option_menu
 
 # ---------------------------------------------------------------------------
 # Config
@@ -58,20 +59,34 @@ def api_post(path: str, payload: dict):
 
 st.sidebar.image(
     "https://cdn-icons-png.flaticon.com/512/2920/2920277.png",
-    width=80,
+    width=72,
 )
-st.sidebar.title("🖨️ PrintFarm ERP")
+st.sidebar.markdown(
+    "<h2 style='text-align:center; margin-top:0; margin-bottom:4px;'>PrintFarm ERP</h2>",
+    unsafe_allow_html=True,
+)
 st.sidebar.markdown("---")
 
-section = st.sidebar.radio(
-    "Навигация",
-    options=[
-        "📦 Номенклатура",
-        "🧪 Сырье",
-        "📋 Заказы и Печать",
-        "🏭 Склад деталей",
-    ],
-)
+with st.sidebar:
+    section = option_menu(
+        menu_title=None,
+        options=["Номенклатура", "Сырье", "Заказы и Печать", "Склад деталей"],
+        icons=["box-seam", "droplet", "card-checklist", "boxes"],
+        menu_icon="printer",
+        default_index=0,
+        styles={
+            "container": {"padding": "4px 0px", "background-color": "transparent"},
+            "icon": {"font-size": "16px"},
+            "nav-link": {
+                "font-size": "14px",
+                "text-align": "left",
+                "margin": "2px 0px",
+                "padding": "10px 16px",
+                "border-radius": "8px",
+            },
+            "nav-link-selected": {"font-weight": "600"},
+        },
+    )
 
 st.sidebar.markdown("---")
 st.sidebar.caption(f"Обновлено: {datetime.now().strftime('%d.%m.%Y %H:%M')}")
@@ -81,20 +96,70 @@ st.sidebar.caption(f"Обновлено: {datetime.now().strftime('%d.%m.%Y %H:%
 # 1. НОМЕНКЛАТУРА
 # ===========================================================================
 
-if section == "📦 Номенклатура":
+if section == "Номенклатура":
     st.title("📦 Номенклатура деталей")
     st.markdown("Справочник всех деталей, доступных для печати.")
 
     parts = api_get("/parts/")
 
-    # --- Catalog table ---
+    # --- Card grid catalog ---
     if parts is not None:
         if parts:
-            df = pd.DataFrame(parts)[
-                ["id", "name", "material", "items_per_bed", "weight_per_item_g", "print_time_mins"]
-            ]
-            df.columns = ["ID", "Название", "Материал", "Шт. на столе", "Вес (г/шт)", "Время печати (мин)"]
-            st.dataframe(df, use_container_width=True, hide_index=True)
+            COLS = 3  # cards per row
+            rows = [parts[i : i + COLS] for i in range(0, len(parts), COLS)]
+
+            for row in rows:
+                cols = st.columns(COLS)
+                for col, part in zip(cols, row):
+                    with col:
+                        with st.container(border=True):
+                            # --- Image ---
+                            if part.get("image_path"):
+                                img_url = f"{API_BASE}{part['image_path']}"
+                                st.image(img_url, use_container_width=True)
+                            else:
+                                st.markdown(
+                                    "<div style='text-align:center; padding:24px 0; "
+                                    "color:#888; font-size:40px;'>🖼️</div>",
+                                    unsafe_allow_html=True,
+                                )
+
+                            # --- Info ---
+                            st.markdown(f"### {part['name']}")
+                            st.markdown(
+                                f"**ID:** {part['id']}  \n"
+                                f"**Материал:** {part['material']}  \n"
+                                f"**Шт. на столе:** {part['items_per_bed']}  \n"
+                                f"**Вес:** {part['weight_per_item_g']} г/шт  \n"
+                                f"**Время печати:** {part['print_time_mins']} мин"
+                            )
+
+                            # --- Image uploader ---
+                            uploaded = st.file_uploader(
+                                "📷 Загрузить фото",
+                                type=["png", "jpg", "jpeg"],
+                                key=f"img_upload_{part['id']}",
+                                label_visibility="collapsed",
+                            )
+                            if uploaded is not None:
+                                file_bytes = uploaded.read()
+                                try:
+                                    resp = requests.post(
+                                        f"{API_BASE}/parts/{part['id']}/image",
+                                        files={"file": (uploaded.name, file_bytes, uploaded.type)},
+                                        timeout=10,
+                                    )
+                                    resp.raise_for_status()
+                                    st.success("✅ Фото загружено!")
+                                    st.rerun()
+                                except requests.exceptions.HTTPError as e:
+                                    try:
+                                        detail = e.response.json().get("detail", str(e))
+                                    except Exception:
+                                        detail = str(e)
+                                    st.error(f"❌ Ошибка загрузки: {detail}")
+                                except requests.exceptions.ConnectionError:
+                                    st.error("❌ Нет соединения с сервером.")
         else:
             st.info("ℹ️ Каталог пуст. Добавьте первую деталь ниже.")
 
@@ -129,11 +194,12 @@ if section == "📦 Номенклатура":
                     st.rerun()
 
 
+
 # ===========================================================================
 # 2. СЫРЬЕ
 # ===========================================================================
 
-elif section == "🧪 Сырье":
+elif section == "Сырье":
     st.title("🧪 Управление сырьём (пластик)")
 
     # Try to fetch all materials — there's no GET /materials/ endpoint,
@@ -197,7 +263,7 @@ elif section == "🧪 Сырье":
 # 3. ЗАКАЗЫ И ПЕЧАТЬ
 # ===========================================================================
 
-elif section == "📋 Заказы и Печать":
+elif section == "Заказы и Печать":
     st.title("📋 Заказы и управление печатью")
 
     # Fetch supporting data
@@ -403,7 +469,7 @@ elif section == "📋 Заказы и Печать":
 # 4. СКЛАД ДЕТАЛЕЙ
 # ===========================================================================
 
-elif section == "🏭 Склад деталей":
+elif section == "Склад деталей":
     st.title("🏭 Склад готовых деталей")
 
     parts = api_get("/parts/") or []

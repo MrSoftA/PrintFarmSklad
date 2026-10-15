@@ -1,4 +1,8 @@
-from fastapi import FastAPI, Depends, HTTPException
+import os
+import shutil
+
+from fastapi import FastAPI, Depends, HTTPException, UploadFile, File
+from fastapi.staticfiles import StaticFiles
 from sqlalchemy.orm import Session
 from pydantic import BaseModel
 from datetime import datetime, timedelta
@@ -15,6 +19,10 @@ from database import (
 )
 
 app = FastAPI(title="PrintFarm ERP API", version="1.0.0")
+
+IMAGES_DIR = "images"
+os.makedirs(IMAGES_DIR, exist_ok=True)
+app.mount("/images", StaticFiles(directory=IMAGES_DIR), name="images")
 
 
 # ---------------------------------------------------------------------------
@@ -121,6 +129,42 @@ def create_part(payload: PartCreate, db: Session = Depends(get_db)):
 def list_parts(db: Session = Depends(get_db)):
     """Return the full parts catalog."""
     return db.query(Part).all()
+
+
+# ---------------------------------------------------------------------------
+# Parts — image upload endpoint
+# ---------------------------------------------------------------------------
+
+@app.post("/parts/{part_id}/image", response_model=PartOut, tags=["Parts"])
+async def upload_part_image(
+    part_id: int,
+    file: UploadFile = File(...),
+    db: Session = Depends(get_db),
+):
+    """Upload an image for a part and save its path in the database."""
+    part = db.query(Part).filter(Part.id == part_id).first()
+    if not part:
+        raise HTTPException(status_code=404, detail=f"Part id={part_id} not found.")
+
+    # Build a safe filename: part_<id>_<original_name>
+    safe_filename = f"part_{part_id}_{file.filename}"
+    dest_path = os.path.join(IMAGES_DIR, safe_filename)
+
+    with open(dest_path, "wb") as buffer:
+        shutil.copyfileobj(file.file, buffer)
+
+    # Store the relative URL (served via /images/...)
+    part.image_path = f"/images/{safe_filename}"
+    db.commit()
+    db.refresh(part)
+
+    db.add(HistoryLog(
+        action_type="PART_IMAGE_UPLOADED",
+        details=f"Image uploaded for part '{part.name}' (id={part.id}): {part.image_path}.",
+    ))
+    db.commit()
+
+    return part
 
 
 # ---------------------------------------------------------------------------
